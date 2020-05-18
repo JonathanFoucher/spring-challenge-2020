@@ -155,19 +155,28 @@ class Player {
 
             Cell actualCell = cells.stream().filter(c -> c.getX() == x && c.getY() == y).findAny().get();
             actualCell.setPoints(value);
-            if(value > 1) {
+            if (value > 1) {
                 actualCell.searchClosestPac().addTargetedBigPellets(actualCell);
             }
         }
 
         // PRINT CLOSEST BIG PELLETS TARGETED BY PACS
-        // pacs.stream().forEach(p -> p.getTargetedBigPellets().forEach(bp -> System.err.println(p.getCurrentCell().getX() + " " + p.getCurrentCell().getY() + "   " + bp.getX() + " " + bp.getY())));
+        // pacs.stream().forEach(p -> p.getTargetedBigPellets().forEach(bp ->
+        // System.err.println(p.getCurrentCell().getX() + " " +
+        // p.getCurrentCell().getY() + " " + bp.getX() + " " + bp.getY())));
 
         pacs.stream().filter(c -> c.isMine()).collect(Collectors.toList())
                 .forEach(p -> p.moveTo(p.getClosestPelletCell()));
 
+        System.out.println(String.join(" | ",
+                pacs.stream().filter(p -> p.getAction() != "").map(Pac::getAction).collect(Collectors.toList())));
+
         // game loop
         while (true) {
+            intersections.stream().filter(i -> i.isTaken()).forEach(i -> i.setIsTaken(false));
+
+            pacs.stream().forEach(Pac::resetAction);
+
             myScore = in.nextInt();
             opponentScore = in.nextInt();
 
@@ -198,6 +207,9 @@ class Player {
             // To debug: System.err.println("Debug messages...");
             pacs.stream().filter(c -> c.isMine()).collect(Collectors.toList())
                     .forEach(p -> p.moveTo(p.getClosestPelletCell())); // MOVE <pacId> <x> <y>
+
+            System.out.println(String.join(" | ",
+                    pacs.stream().filter(p -> p.getAction() != "").map(Pac::getAction).collect(Collectors.toList())));
         }
     }
 
@@ -212,6 +224,7 @@ class Pac {
     private Cell currentCell;
     private boolean mine;
     private List<Cell> targetedBigPellets;
+    private String action;
 
     public Pac(int id, int x, int y, boolean mine) {
         this.id = id;
@@ -219,6 +232,7 @@ class Pac {
         this.currentCell.setPoints(0);
         this.mine = mine;
         this.targetedBigPellets = new ArrayList<Cell>();
+        this.action = "";
     }
 
     public int getId() {
@@ -233,6 +247,10 @@ class Pac {
         return this.mine;
     }
 
+    public void kill() {
+        Player.pacs.remove(this);
+    }
+
     public List<Cell> getTargetedBigPellets() {
         return this.targetedBigPellets;
     }
@@ -245,8 +263,25 @@ class Pac {
         return currentCell.isIntersection();
     }
 
+    public void resetAction() {
+        this.action = "";
+    }
+
+    public String getAction() {
+        return this.action;
+    }
+
     public void moveTo(Cell cell) {
-        System.out.println("MOVE " + id + " " + cell.getX() + " " + cell.getY());
+        if (cell != null) {
+            this.action = "MOVE " + id + " " + cell.getX() + " " + cell.getY();
+
+            if (cell.isIntersection()) {
+                Player.intersections.stream().filter(i -> i.getCell().equals(cell)).findAny().get().setIsTaken(true);
+                Player.pipes.stream().filter(p -> this.equals(p.isTakenBy())).forEach(p -> p.setIsTakenBy(null));
+            } else {
+                Player.pipes.stream().filter(p -> p.getCells().contains(cell)).findAny().get().setIsTakenBy(this);
+            }
+        }
     }
 
     public void setNewCell(int x, int y) {
@@ -269,9 +304,18 @@ class Pac {
 
         List<Cell> alreadySeenCells = new ArrayList<Cell>();
 
-        List<Cell> actualCells = Player.cells.stream().filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                || c.isPosition((x - 1 + Player.width) % Player.width, y) || c.isPosition(x, (y + 1) % Player.height)
-                || c.isPosition(x, (y - 1 + Player.height) % Player.height))).collect(Collectors.toList());
+        List<Cell> actualCells = Player.cells.stream()
+                .filter(c -> (c.isPosition((x + 1) % Player.width, y)
+                        || c.isPosition((x - 1 + Player.width) % Player.width, y)
+                        || c.isPosition(x, (y + 1) % Player.height)
+                        || c.isPosition(x, (y - 1 + Player.height) % Player.height))
+                        && !c.isTargeted()
+                        && ((c.isIntersection() && !Player.intersections.stream()
+                                .filter(inter -> inter.getCell().equals(c)).findAny().get().isTaken())
+                                || (!c.isIntersection() && !Player.pacs.stream().filter(p -> !p.equals(this))
+                                        .collect(Collectors.toList()).contains(Player.pipes.stream()
+                                                .filter(p -> p.getCells().contains(c)).findAny().get().isTakenBy()))))
+                .collect(Collectors.toList());
 
         do {
             List<Cell> futurCells = new ArrayList<Cell>();
@@ -279,22 +323,30 @@ class Pac {
             for (int i = 0; i < actualCells.size(); i++) {
                 Cell actualCell = actualCells.get(i);
 
-                if (actualCell.getPoints() > 0) {
+                if (actualCell.getPoints() > 0 && actualCell.searchClosestAlliedPac().equals(this)) {
                     return actualCell;
                 }
 
-                futurCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && alreadySeenCells.stream()
-                                        .filter(ac -> ac.getX() == c.getX() && ac.getY() == c.getY())
-                                        .collect(Collectors.toList()).isEmpty()
-                                && !futurCells.contains(c))
-                        .collect(Collectors.toList()));
+                futurCells
+                        .addAll(Player.cells.stream()
+                                .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
+                                        || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
+                                                actualCell.getY())
+                                        || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
+                                        || c.isPosition(actualCell.getX(),
+                                                (actualCell.getY() - 1 + Player.height) % Player.height))
+                                        && alreadySeenCells.stream()
+                                                .filter(ac -> ac.getX() == c.getX() && ac.getY() == c.getY())
+                                                .collect(Collectors.toList()).isEmpty()
+                                        && !futurCells.contains(c) && !c.isTargeted()
+                                        && ((c.isIntersection() && !Player.intersections.stream()
+                                                .filter(inter -> inter.getCell().equals(c)).findAny().get().isTaken())
+                                                || (!c.isIntersection() && !Player.pacs.stream()
+                                                        .filter(p -> !p.equals(this)).collect(Collectors.toList())
+                                                        .contains(Player.pipes.stream()
+                                                                .filter(p -> p.getCells().contains(c)).findAny().get()
+                                                                .isTakenBy()))))
+                                .collect(Collectors.toList()));
             }
 
             alreadySeenCells.addAll(actualCells);
@@ -370,7 +422,24 @@ class Cell {
             distMap.put(p, distance);
         });
 
-        return distMap.entrySet().stream().filter(d -> d.getValue() == Collections.min(listDist)).findFirst().get()
+        return distMap.entrySet().stream().filter(d -> d.getValue().equals(Collections.min(listDist))).findFirst().get()
+                .getKey();
+
+        // !TODO prendre le plus proche sinon le mine sinon celui qui a le moins
+        // d'objectif a prendre
+    }
+
+    public Pac searchClosestAlliedPac() {
+        Map<Pac, Double> distMap = new HashMap<Pac, Double>();
+        List<Double> listDist = new ArrayList<Double>();
+
+        Player.pacs.stream().filter(p -> p.isMine()).forEach(p -> {
+            Double distance = calculDistance(this, p.getCurrentCell());
+            listDist.add(distance);
+            distMap.put(p, distance);
+        });
+
+        return distMap.entrySet().stream().filter(d -> d.getValue().equals(Collections.min(listDist))).findFirst().get()
                 .getKey();
 
         // !TODO prendre le plus proche sinon le mine sinon celui qui a le moins
@@ -384,12 +453,14 @@ class Cell {
 }
 
 class Intersection {
-    Cell cell;
-    Map<Pipe, Intersection> pathsMap;
+    private Cell cell;
+    private Map<Pipe, Intersection> pathsMap;
+    private boolean isTaken;
 
     public Intersection(Cell cell) {
         this.cell = cell;
         this.pathsMap = new HashMap<Pipe, Intersection>();
+        this.isTaken = false;
     }
 
     public Cell getCell() {
@@ -403,15 +474,25 @@ class Intersection {
     public void addPathsMap(Pipe pipe, Intersection intersection) {
         this.pathsMap.put(pipe, intersection);
     }
+
+    public boolean isTaken() {
+        return isTaken;
+    }
+
+    public void setIsTaken(boolean isTaken) {
+        this.isTaken = isTaken;
+    }
 }
 
 class Pipe {
-    List<Cell> cells;
-    List<Intersection> intersections;
+    private List<Cell> cells;
+    private List<Intersection> intersections;
+    private Pac isTakenBy;
 
     public Pipe(List<Cell> cells) {
         this.cells = cells;
         this.intersections = new ArrayList<Intersection>();
+        this.isTakenBy = null;
     }
 
     public List<Cell> getCells() {
@@ -440,5 +521,13 @@ class Pipe {
 
     public int getPointsCells() {
         return cells.stream().map(Cell::getPoints).reduce(0, Integer::sum);
+    }
+
+    public Pac isTakenBy() {
+        return isTakenBy;
+    }
+
+    public void setIsTakenBy(Pac isTakenBy) {
+        this.isTakenBy = isTakenBy;
     }
 }
