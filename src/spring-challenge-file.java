@@ -1,15 +1,3 @@
-// retirer les collect size => count()
-// retirer collect foreach
-
-// TODO => gestion des pacs morts
-// TODO => mécanisme de défense (switch)
-// TODO => fuite opposé quand ennemi si tuyau (+ save conscience fuite)
-// TODO => gestion boost optimal
-
-// TODO PAS BOOST -1 AVANT INTER (cas croisement avec )
-
-// todo if speed 2 => viser 2e pastille
-
 import java.util.*;
 import java.io.*;
 import java.math.*;
@@ -31,6 +19,11 @@ class Player {
     public static List<Pipe> pipes = new ArrayList<Pipe>();
 
     public static int round = 1;
+    public static long totalCells;
+    public static long remainingPallets;
+    public static long consumedPallets = 0L;
+
+    public static long limitCalculations;
 
     public static void main(String args[]) {
         cells = new ArrayList<Cell>();
@@ -44,12 +37,73 @@ class Player {
 
         for (int i = 0; i < height; i++) {
             String row = in.nextLine(); // one line of the grid: space " " is floor, pound "#" is wall
+            List<Cell> visionCells = new ArrayList<Cell>();
+
             for (int j = 0; j < width; j++) {
                 if (row.charAt(j) == ' ') {
-                    cells.add(new Cell(j, i, 1));
+                    Cell actualCell = new Cell(j, i, 1);
+
+                    cells.add(actualCell);
+
+                    visionCells.add(actualCell);
+                } else {
+                    if (visionCells.size() > 0) {
+                        List<Cell> finalVisionCells = visionCells;
+                        visionCells.forEach(c -> c.addVisionCells(finalVisionCells));
+
+                        visionCells = new ArrayList<Cell>();
+                    }
+                }
+
+            }
+
+            if (visionCells.size() > 0) {
+                List<Cell> finalVisionCells = visionCells;
+                visionCells.forEach(c -> c.addVisionCells(finalVisionCells));
+
+                visionCells = new ArrayList<Cell>();
+            }
+
+            int finalI = i;
+            if (cells.stream().anyMatch(c -> c.isPosition(0, finalI))) {
+                List<Cell> vision1 = new ArrayList<>();
+
+                vision1.addAll(cells.stream().filter(c -> c.isPosition(0, finalI)).findAny().get().getVisionCells());
+
+                List<Cell> vision2 = new ArrayList<>();
+
+                vision2.addAll(
+                        cells.stream().filter(c -> c.isPosition(width - 1, finalI)).findAny().get().getVisionCells());
+
+                vision1.forEach(c -> c.addVisionCells(vision2));
+                vision2.forEach(c -> c.addVisionCells(vision1));
+            }
+
+        }
+
+        for (int i = 0; i < width; i++) {
+            List<Cell> visionCells = new ArrayList<Cell>();
+
+            for (int j = 0; j < height; j++) {
+                int finalI = i;
+                int finalJ = j;
+                Cell actualCell = cells.stream().filter(c -> c.isPosition(finalI, finalJ)).findAny().orElse(null);
+
+                if (actualCell != null) {
+                    visionCells.add(actualCell);
+                } else if (actualCell == null || j == height - 1) {
+                    if (visionCells.size() > 0) {
+                        List<Cell> finalVisionCells = visionCells;
+                        visionCells.forEach(c -> c.addVisionCells(finalVisionCells));
+
+                        visionCells = new ArrayList<Cell>();
+                    }
                 }
             }
         }
+
+        totalCells = cells.stream().filter(c -> c.getPoints() > 0).count();
+        remainingPallets = totalCells;
 
         for (int i = 0; i < cells.size(); i++) {
             Cell actualCell = cells.get(i);
@@ -61,7 +115,7 @@ class Player {
                             || c.isPosition((x - 1 + Player.width) % Player.width, y)
                             || c.isPosition(x, (y + 1) % Player.height)
                             || c.isPosition(x, (y - 1 + Player.height) % Player.height)))
-                    .collect(Collectors.toList()).size() > 2) {
+                    .count() > 2) {
                 Intersection intersection = new Intersection(actualCell);
                 actualCell.setIsIntersection(true);
                 actualCell.setIntersection(intersection);
@@ -81,6 +135,8 @@ class Player {
                             || c.isPosition(xI, (yI - 1 + Player.height) % Player.height)))
                     .collect(Collectors.toList());
 
+            intersection.getCell().addNextCells(cellsNextTo);
+
             for (int j = 0; j < cellsNextTo.size(); j++) {
                 Cell firstCell = cellsNextTo.get(j);
                 Pipe pipe = pipes.stream().filter(p -> p.containsCell(firstCell)).findAny().orElse(null);
@@ -91,6 +147,8 @@ class Player {
                     Cell nextCell = firstCell;
 
                     while (nextCell != null && !nextCell.isIntersection()) {
+                        Cell previousCell = nextCell;
+
                         pipeCells.add(nextCell);
 
                         int x = nextCell.getX();
@@ -103,6 +161,11 @@ class Player {
                                         || c.isPosition(x, (y - 1 + Player.height) % Player.height))
                                         && !pipeCells.contains(c) && !c.isPosition(xI, yI))
                                 .findAny().orElse(null);
+
+                        if (nextCell != null) {
+                            nextCell.addNextCell(previousCell);
+                            previousCell.addNextCell(nextCell);
+                        }
                     }
 
                     Cell endCell = nextCell;
@@ -113,6 +176,8 @@ class Player {
 
                     pipe = new Pipe(pipeCells);
                     pipe.addIntersection(intersection);
+                    pipe.getCells().get(0).addNextCell(intersection.getCell());
+
                     if (nextIntersection != null) {
                         pipe.addIntersection(nextIntersection);
                     }
@@ -156,9 +221,11 @@ class Player {
         }
 
         visibleEnnemiesIds.forEach(pacId -> {
-            Pac foundPac = pacs.stream().filter(p -> p.getId() == pacId && p.isMine() == false).findAny().get();
+            Pac foundPac = pacs.stream().filter(p -> p.getId() == pacId && !p.isMine()).findAny().get();
             inSightEnnemies.add(foundPac);
         });
+
+        limitCalculations = 200 / Player.pacs.stream().filter(p -> p.isMine()).count();
 
         int visiblePelletCount = in.nextInt(); // all pellets in sight
         for (int i = 0; i < visiblePelletCount; i++) {
@@ -168,17 +235,20 @@ class Player {
 
             Cell actualCell = cells.stream().filter(c -> c.isPosition(x, y)).findAny().get();
             actualCell.setPoints(value);
-            if (value > 1) {
-                actualCell.searchClosestPac().addTargetedBigPellets(actualCell);
-            }
         }
+
+        analyzeBigPellets();
+        analyzeBigPipes();
 
         inSightEnnemies.forEach(p -> p.getCurrentCell().searchClosestAlliedPac().actionOnEnnemy(p));
 
         inSightEnnemies.removeAll(inSightEnnemies);
 
-        pacs.stream().filter(c -> c.isMine() && "".equals(c.getAction())).collect(Collectors.toList())
-                .forEach(p -> p.nextAction());
+        pacs.stream().filter(p -> p.isMine() && !p.getTypeId().equals("DEAD") && "".equals(p.getAction()))
+                .collect(Collectors.toList()).forEach(p -> p.nextPriorityAction());
+
+        pacs.stream().filter(p -> p.isMine() && !p.getTypeId().equals("DEAD") && "".equals(p.getAction()))
+                .collect(Collectors.toList()).forEach(p -> p.nextAction());
 
         System.out.println(String.join(" | ",
                 pacs.stream().filter(p -> !"".equals(p.getAction())).map(Pac::getAction).collect(Collectors.toList())));
@@ -186,6 +256,9 @@ class Player {
         // game loop
         while (true) {
             round++;
+
+            remainingPallets = cells.stream().filter(c -> c.getPoints() > 0).count();
+            consumedPallets = totalCells - remainingPallets;
 
             intersections.stream().filter(i -> i.isTaken()).forEach(i -> i.setIsTaken(false));
 
@@ -195,8 +268,6 @@ class Player {
 
             myScore = in.nextInt();
             opponentScore = in.nextInt();
-
-            List<Pac> myAlivePacs = new ArrayList<Pac>();
 
             visiblePacCount = in.nextInt(); // all your pacs and enemy pacs in sight
             for (int i = 0; i < visiblePacCount; i++) {
@@ -208,18 +279,29 @@ class Player {
                 int speedTurnsLeft = in.nextInt(); // unused in wood leagues
                 int abilityCooldown = in.nextInt(); // unused in wood leagues
 
-                Pac foundPac = pacs.stream().filter(p -> p.getId() == pacId && p.isMine() == mine).findAny().get();
+                Pac foundPac = pacs.stream().filter(p -> p.getId() == pacId && p.isMine() == mine).findAny()
+                        .orElse(null);
 
-                if (mine) {
-                    myAlivePacs.add(foundPac);
-                } else {
-                    inSightEnnemies.add(foundPac);
+                if (foundPac != null) {
+
+                    if (!mine && !typeId.equals("DEAD")) {
+                        inSightEnnemies.add(foundPac);
+                    }
+
+                    foundPac.updateRound(x, y, typeId, speedTurnsLeft, abilityCooldown);
+
+                    if (typeId.equals("DEAD")) {
+                        foundPac.kill();
+                        pacs.remove(foundPac);
+                    }
                 }
-
-                foundPac.updateRound(x, y, typeId, speedTurnsLeft, abilityCooldown);
             }
 
-            checkDeaths(myAlivePacs);
+            limitCalculations = 400 / Player.pacs.stream().filter(p -> p.isMine()).count();
+
+            pacs.stream().forEach(p -> {
+                p.getTargetedBigPellets().removeAll(p.getTargetedBigPellets());
+            });
 
             visiblePelletCount = in.nextInt(); // all pellets in sight
 
@@ -232,19 +314,26 @@ class Player {
 
                 Cell actualCell = cells.stream().filter(c -> c.isPosition(x, y)).findAny().get();
                 actualCell.setPoints(value);
-                if (value > 1 && !pacs.stream().anyMatch(p -> p.getTargetedBigPellets().contains(actualCell))) {
-                    actualCell.searchClosestPac().addTargetedBigPellets(actualCell);
+                if (value > 1 && !pacs.stream().anyMatch(p -> p.getTargetedBigPellets().contains(actualCell)
+                        || p.getObligatoryObjectives().contains(actualCell))) {
+                    actualCell.searchClosestPac().addTargetedBigPellet(actualCell);
                 }
             }
 
             pacs.stream().forEach(Pac::refreshBigTargets);
 
+            pacs.stream().filter(p -> p.getCurrentCell() != null && !p.getTypeId().equals("DEAD"))
+                    .forEach(p -> p.getCurrentCell().setPacOnCell(p));
+
             inSightEnnemies.stream().forEach(p -> p.getCurrentCell().searchClosestAlliedPac().actionOnEnnemy(p));
 
             inSightEnnemies.removeAll(inSightEnnemies);
 
-            pacs.stream().filter(p -> p.isMine() && "".equals(p.getAction())).collect(Collectors.toList())
-                    .forEach(p -> p.nextAction());
+            pacs.stream().filter(p -> p.isMine() && !p.getTypeId().equals("DEAD") && "".equals(p.getAction()))
+                    .collect(Collectors.toList()).forEach(p -> p.nextPriorityAction());
+
+            pacs.stream().filter(p -> p.isMine() && !p.getTypeId().equals("DEAD") && "".equals(p.getAction()))
+                    .collect(Collectors.toList()).forEach(p -> p.nextAction());
 
             System.out.println(String.join(" | ", pacs.stream().filter(p -> !"".equals(p.getAction()))
                     .map(Pac::getAction).collect(Collectors.toList())));
@@ -257,16 +346,155 @@ class Player {
     }
 
     public static void resetEnemiesPositions() {
-        pacs.stream().filter(p -> !p.isMine() && p.getCurrentCell() != null).forEach(p -> p.disappear());
-    }
-
-    public static void checkDeaths(List<Pac> myAlivePacs) {
-        pacs.stream().filter(p -> p.isMine() && !myAlivePacs.contains(p)).forEach(Pac::kill);
-        pacs.removeIf(p -> p.isMine() && !myAlivePacs.contains(p));
+        pacs.stream().filter(p -> !p.isMine() && !p.getTypeId().equals("DEAD") && p.getCurrentCell() != null)
+                .forEach(p -> p.disappear());
     }
 
     public static void resetBigPellets() {
         cells.stream().filter(c -> c.getPoints() > 1).forEach(c -> c.setPoints(0));
+    }
+
+    public static void analyzeBigPellets() {
+        List<Cell> bigPellets = cells.stream().filter(c -> c.getPoints() > 1).collect(Collectors.toList());
+
+        List<DistancePacBigPellet> distPacsPellets = new ArrayList<DistancePacBigPellet>();
+
+        for (int i = 0; i < bigPellets.size(); i++) {
+            Cell actualCell = bigPellets.get(i);
+
+            pacs.forEach(p -> distPacsPellets
+                    .add(new DistancePacBigPellet(p.getCurrentCell().getDistanceTo(actualCell), p, actualCell)));
+        }
+
+        List<DistanceBetweenBigPellets> distBetweenBigPellets = new ArrayList<DistanceBetweenBigPellets>();
+
+        for (int i = 0; i < bigPellets.size(); i++) {
+            for (int j = 0; j < bigPellets.size(); j++) {
+                if (i != j) {
+                    Cell cell1 = bigPellets.get(i);
+                    Cell cell2 = bigPellets.get(j);
+                    distBetweenBigPellets.add(new DistanceBetweenBigPellets(cell1.getDistanceTo(cell2), cell1, cell2));
+                }
+            }
+        }
+
+        List<PossibilityObjective> possibilityObjectives = new ArrayList<PossibilityObjective>();
+
+        pacs.forEach(p -> {
+            for (int i = 0; i < bigPellets.size(); i++) {
+                Cell cell1 = bigPellets.get(i);
+                int calculateDistance = distPacsPellets.stream()
+                        .filter(dpp -> dpp.getPac() == p && dpp.getCell() == cell1).findAny().get().getDistance();
+
+                possibilityObjectives.add(new PossibilityObjective(cell1, calculateDistance, p));
+
+                for (int j = 0; j < bigPellets.size(); j++) {
+                    if (i != j) {
+                        Cell cell2 = bigPellets.get(j);
+                        int totalDistance = calculateDistance + distBetweenBigPellets.stream()
+                                .filter(dbbp -> dbbp.containsCells(cell1, cell2)).findAny().get().getDistance();
+
+                        possibilityObjectives.add(new PossibilityObjective(cell1, cell2, totalDistance, p));
+                    }
+                }
+            }
+        });
+
+        Collections.sort(possibilityObjectives, Comparator.comparing(po -> po.getTotalDistance()));
+
+        while (possibilityObjectives.size() > 0) {
+            PossibilityObjective actualObjectif = possibilityObjectives.get(0);
+
+            List<PossibilityObjective> actualObjectives = new ArrayList<PossibilityObjective>();
+            actualObjectives.addAll(possibilityObjectives.stream()
+                    .filter(po -> po.getTotalDistance() == actualObjectif.getTotalDistance()
+                            && po.getObjectiveList().contains(actualObjectif.getObjectiveList().get(0))
+                            && po.getObjectiveList().size() == 1)
+                    .collect(Collectors.toList()));
+
+            if (actualObjectives.size() == 0) {
+                actualObjectives.addAll(possibilityObjectives.stream()
+                        .filter(po -> po.getTotalDistance() == actualObjectif.getTotalDistance()
+                                && po.getObjectiveList().contains(actualObjectif.getObjectiveList().get(0)))
+                        .collect(Collectors.toList()));
+            }
+
+            List<Pac> actualPacs = new ArrayList<Pac>();
+            actualObjectives.forEach(po -> actualPacs.add(po.getPac()));
+
+            Pac chosenPac = null;
+
+            for (int i = 0; i < actualObjectives.size(); i++) {
+                Pac loopPac = actualObjectives.get(i).getPac();
+
+                if (loopPac.isMine() && !actualPacs.stream()
+                        .anyMatch(p -> !p.isMine() && p.getTypeId().equals(loopPac.getCounter(loopPac.getTypeId())))) {
+                    chosenPac = loopPac;
+                    actualObjectives.get(i).getObjectiveList().forEach(c -> loopPac.addObligatoryObjective(c));
+                    break;
+                }
+            }
+
+            possibilityObjectives.removeAll(possibilityObjectives.stream()
+                    .filter(po -> po.getObjectiveList().contains(actualObjectif.getObjectiveList().get(0)))
+                    .collect(Collectors.toList()));
+
+            if (actualObjectif.getObjectiveList().size() == 2) {
+                possibilityObjectives.removeAll(possibilityObjectives.stream()
+                        .filter(po -> po.getObjectiveList().contains(actualObjectif.getObjectiveList().get(1)))
+                        .collect(Collectors.toList()));
+
+            }
+
+            if (chosenPac != null) {
+                Pac pacToDelete = chosenPac;
+                possibilityObjectives.removeAll(possibilityObjectives.stream()
+                        .filter(po -> po.getPac().equals(pacToDelete)).collect(Collectors.toList()));
+            }
+        }
+
+        pacs.stream()
+                .filter(p -> p.isMine() && !p.getCurrentCell().isIntersection()
+                        && p.getCurrentCell().getPipe().isDeadEnd() && p.getObligatoryObjectives().isEmpty())
+                .forEach(p -> p
+                        .addObligatoryObjective(p.getCurrentCell().getPipe().getIntersections().get(0).getCell()));
+
+    }
+
+    public static void analyzeBigPipes() {
+        List<Pipe> bigPipes = pipes.stream()
+                .filter(p -> p.getIntersections().size() > 1 && p.getPointsCells() >= 5 && !pacs.stream()
+                        .anyMatch(pac -> pac.getObligatoryObjectives().size() > 0
+                                && pac.getObligatoryObjectives().contains(p.getCells().get(p.getCells().size() / 2))))
+                .collect(Collectors.toList());
+
+        Collections.sort(bigPipes, Comparator.comparing(p -> p.getPointsCells()));
+        Collections.reverse(bigPipes);
+
+        pacs.stream().filter(p -> p.getObligatoryObjectives().size() == 0).forEach(p -> {
+            if (bigPipes.size() > 0) {
+                Collections.sort(bigPipes, new Comparator() {
+                    public int compare(Object o1, Object o2) {
+
+                        Integer ca1 = ((Pipe) o1).getCells().get(((Pipe) o1).getCells().size() / 2)
+                                .getDistanceTo(p.getCurrentCell());
+                        Integer ca2 = ((Pipe) o2).getCells().get(((Pipe) o2).getCells().size() / 2)
+                                .getDistanceTo(p.getCurrentCell());
+                        int resultComp = ca1.compareTo(ca2);
+
+                        if (resultComp != 0) {
+                            return resultComp;
+                        }
+
+                        Integer cb1 = ((Pipe) o1).getPointsCells();
+                        Integer cb2 = ((Pipe) o2).getPointsCells();
+                        return -cb1.compareTo(cb2);
+                    }
+                });
+
+                p.addObligatoryObjective(bigPipes.get(0).getCells().get(bigPipes.get(0).getCells().size() / 2));
+            }
+        });
     }
 }
 
@@ -275,6 +503,7 @@ class Pac {
     private Cell currentCell;
     private boolean mine;
     private List<Cell> targetedBigPellets;
+    private List<Cell> obligatoryObjectives;
     private String action;
     private String typeId;
     private int speedTurnsLeft;
@@ -282,18 +511,22 @@ class Pac {
     private int speed;
     private List<Cell> previousCells;
     private boolean isInDanger;
+    private int counterFlee;
+    private Cell lastEnemyPosition;
 
     public Pac(int id, int x, int y, boolean mine, String typeId) {
         this.id = id;
         this.mine = mine;
         this.previousCells = new ArrayList<Cell>();
         this.targetedBigPellets = new ArrayList<Cell>();
+        this.obligatoryObjectives = new ArrayList<Cell>();
         this.action = "";
         this.typeId = typeId;
         this.speed = 1;
         setNewCell(x, y);
         this.currentCell.setPoints(0);
         this.isInDanger = false;
+        this.counterFlee = 0;
     }
 
     public int getId() {
@@ -309,20 +542,30 @@ class Pac {
     }
 
     public void kill() {
+        if (mine) {
+            this.currentCell.setPacOnCell(null);
+        }
+
         Player.pipes.stream().filter(p -> this.equals(p.isTakenBy())).findAny().ifPresent(p -> p.setIsTakenBy(null));
         if (this.currentCell.getIntersection() != null) {
             this.currentCell.getIntersection().setIsTaken(false);
         }
-
-        this.currentCell.setPacOnCell(null);
     }
 
     public List<Cell> getTargetedBigPellets() {
         return this.targetedBigPellets;
     }
 
-    public void addTargetedBigPellets(Cell target) {
+    public void addTargetedBigPellet(Cell target) {
         this.targetedBigPellets.add(target);
+    }
+
+    public List<Cell> getObligatoryObjectives() {
+        return this.obligatoryObjectives;
+    }
+
+    public void addObligatoryObjective(Cell target) {
+        this.obligatoryObjectives.add(target);
     }
 
     public boolean isAtIntersection() {
@@ -358,8 +601,8 @@ class Pac {
     }
 
     public void updateRound(int x, int y, String typeId, int speedTurnsLeft, int abilityCooldown) {
-        setNewCell(x, y);
         this.typeId = typeId;
+        setNewCell(x, y);
         this.speedTurnsLeft = speedTurnsLeft;
         if (speedTurnsLeft > 0) {
             this.speed = 2;
@@ -377,54 +620,7 @@ class Pac {
     }
 
     public void updateVision() {
-        Cell startCell = this.currentCell;
-        int x = startCell.getX();
-        int y = startCell.getY();
-
-        // CLEAN TOP
-        Cell topCell = Player.cells.stream().filter(c -> c.isPosition(x, (y - 1 + Player.height) % Player.height))
-                .findAny().orElse(null);
-        while (topCell != null) {
-            topCell.setPoints(0);
-            Cell tempCell = topCell;
-            topCell = Player.cells.stream()
-                    .filter(c -> c.isPosition(tempCell.getX(), (tempCell.getY() - 1 + Player.height) % Player.height))
-                    .findAny().orElse(null);
-        }
-
-        // CLEAN BOT
-        Cell botCell = Player.cells.stream().filter(c -> c.isPosition(x, (y + 1) % Player.height)).findAny()
-                .orElse(null);
-        while (botCell != null) {
-            botCell.setPoints(0);
-            Cell tempCell = botCell;
-            botCell = Player.cells.stream()
-                    .filter(c -> c.isPosition(tempCell.getX(), (tempCell.getY() + 1) % Player.height)).findAny()
-                    .orElse(null);
-        }
-
-        // CLEAN LEFT
-        Cell leftCell = Player.cells.stream().filter(c -> c.isPosition((x - 1 + Player.width) % Player.width, y))
-                .findAny().orElse(null);
-        while (leftCell != null && leftCell != startCell) {
-            leftCell.setPoints(0);
-            Cell tempCell = leftCell;
-            leftCell = Player.cells.stream()
-                    .filter(c -> c.isPosition((tempCell.getX() - 1 + Player.width) % Player.width, tempCell.getY()))
-                    .findAny().orElse(null);
-        }
-
-        // CLEAN RIGHT
-        Cell rigthCell = Player.cells.stream().filter(c -> c.isPosition((x + 1) % Player.width, y)).findAny()
-                .orElse(null);
-        while (rigthCell != null && rigthCell != startCell) {
-            rigthCell.setPoints(0);
-            Cell tempCell = rigthCell;
-            rigthCell = Player.cells.stream()
-                    .filter(c -> c.isPosition((tempCell.getX() + 1) % Player.width, tempCell.getY())).findAny()
-                    .orElse(null);
-        }
-
+        this.currentCell.getVisionCells().stream().forEach(c -> c.setPoints(0));
     }
 
     public void activateSpeed() {
@@ -452,21 +648,11 @@ class Pac {
                     Intersection intersection = pipe.getIntersections().get(0);
                     Cell c = intersection.getCell();
 
-                    if (pipe.getIntersections().size() > 1
-                            && !(c.isPosition((currentCell.getX() + 1) % Player.width, currentCell.getY())
-                                    || c.isPosition((currentCell.getX() - 1 + Player.width) % Player.width,
-                                            currentCell.getY())
-                                    || c.isPosition(currentCell.getX(), (currentCell.getY() + 1) % Player.height)
-                                    || c.isPosition(currentCell.getX(),
-                                            (currentCell.getY() - 1 + Player.height) % Player.height))) {
+                    if (pipe.getIntersections().size() > 1 && !this.currentCell.getNextCells().contains(c)) {
                         intersection = pipe.getIntersections().get(1);
                     }
 
-                    if (c.isPosition((currentCell.getX() + 1) % Player.width, currentCell.getY())
-                            || c.isPosition((currentCell.getX() - 1 + Player.width) % Player.width, currentCell.getY())
-                            || c.isPosition(currentCell.getX(), (currentCell.getY() + 1) % Player.height)
-                            || c.isPosition(currentCell.getX(),
-                                    (currentCell.getY() - 1 + Player.height) % Player.height)) {
+                    if (this.currentCell.getNextCells().contains(c)) {
                         if (intersection.isTaken()) {
                             this.action = "";
                         } else {
@@ -483,126 +669,266 @@ class Pac {
         Cell cell = Player.cells.stream().filter(c -> c.isPosition(x, y)).findAny().get();
 
         this.previousCells.add(cell);
-        if (this.previousCells.size() > 10) {
+        if (this.previousCells.size() > 15) {
             this.previousCells.remove(0);
         }
 
         cell.setPoints(0);
         this.currentCell = cell;
-        cell.setPacOnCell(this);
+        if (!this.typeId.equals("DEAD")) {
+            cell.setPacOnCell(this);
+        }
 
         this.targetedBigPellets.removeIf(c -> cell.equals(c));
+        this.obligatoryObjectives.removeIf(c -> cell.equals(c));
     }
 
     public void disappear() {
         this.currentCell.setPacOnCell(null);
         this.currentCell = null;
         this.targetedBigPellets.removeAll(this.targetedBigPellets);
+        this.obligatoryObjectives.removeAll(this.obligatoryObjectives);
+    }
+
+    public DistancePac searchClosestAlliedPacFlightDistance() {
+        List<Pac> alliesPacs = Player.pacs.stream().filter(p -> p.isMine() && !p.equals(this))
+                .collect(Collectors.toList());
+
+        if (alliesPacs.size() == 0) {
+            return null;
+        }
+
+        List<DistancePac> distPac = new ArrayList<DistancePac>();
+
+        alliesPacs.forEach(p -> {
+            Double distance = this.currentCell.calculFlightDistance(p.getCurrentCell());
+            distPac.add(new DistancePac(distance, p));
+        });
+
+        return Collections.min(distPac, Comparator.comparing(d -> d.getDistance()));
     }
 
     public Cell getClosestPelletCell() {
-        if (this.targetedBigPellets.size() > 0) {
-            return this.targetedBigPellets.get(0);
+        if (this.obligatoryObjectives.size() > 0) {
+            Cell objective = this.obligatoryObjectives.get(0);
+            if (this.speed == 2 && this.currentCell.getNextCells().contains(objective)) {
+
+                List<Cell> newCandidatsCells = new ArrayList<Cell>();
+
+                newCandidatsCells.addAll(objective.getNextCells().stream()
+                        .filter(c -> !this.currentCell.equals(c) && c.getPoints() > 0
+                                && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                        && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
+                        .collect(Collectors.toList()));
+
+                if (newCandidatsCells.size() == 1) {
+                    objective = newCandidatsCells.get(0);
+                } else if (newCandidatsCells.size() > 0) {
+                    Cell cellToTarget = newCandidatsCells.stream()
+                            .filter(c -> c.isIntersection() || !c.getPipe().isDeadEnd()).findAny().orElse(null);
+                    if (cellToTarget != null) {
+                        objective = cellToTarget;
+                    } else {
+                        objective = newCandidatsCells.get(0);
+                    }
+                }
+            }
+
+            return objective;
+
+        } else if (this.targetedBigPellets.size() > 0) {
+            Cell objective = this.targetedBigPellets.get(0);
+            if (this.speed == 2 && this.currentCell.getNextCells().contains(objective)) {
+
+                List<Cell> newCandidatsCells = new ArrayList<Cell>();
+
+                newCandidatsCells.addAll(objective.getNextCells().stream()
+                        .filter(c -> !this.currentCell.equals(c) && c.getPoints() > 0
+                                && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                        && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
+                        .collect(Collectors.toList()));
+
+                if (newCandidatsCells.size() == 1) {
+                    objective = newCandidatsCells.get(0);
+                } else if (newCandidatsCells.size() > 0) {
+                    Cell cellToTarget = newCandidatsCells.stream()
+                            .filter(c -> c.isIntersection() || !c.getPipe().isDeadEnd()).findAny().orElse(null);
+                    if (cellToTarget != null) {
+                        objective = cellToTarget;
+                    } else {
+                        objective = newCandidatsCells.get(0);
+                    }
+                }
+            }
+
+            return objective;
         }
 
+        DistancePac closestAllyPac = searchClosestAlliedPacFlightDistance();
+
         Cell closestTarget = null;
-        final int x = this.currentCell.getX();
-        final int y = this.currentCell.getY();
+        long counter = 1L;
 
         List<Cell> alreadySeenCells = new ArrayList<Cell>();
+        alreadySeenCells.add(this.currentCell);
 
-        List<Cell> actualCells = Player.cells.stream()
-                .filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                        || c.isPosition((x - 1 + Player.width) % Player.width, y)
-                        || c.isPosition(x, (y + 1) % Player.height)
-                        || c.isPosition(x, (y - 1 + Player.height) % Player.height))
-                        && ((c.isIntersection() && !c.getIntersection().isTaken())
-                                || (!c.isIntersection() && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
+        List<Cell> actualCells = this.currentCell.getNextCells().stream()
+                .filter(c -> (c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                        && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null)))
                 .collect(Collectors.toList());
+
+        List<Cell> candidatsCells = new ArrayList<Cell>();
 
         do {
             List<Cell> futurCells = new ArrayList<Cell>();
-            List<Cell> candidatsCells = new ArrayList<Cell>();
 
             for (int i = 0; i < actualCells.size(); i++) {
                 Cell actualCell = actualCells.get(i);
 
-                if (actualCell.getPoints() > 0 && actualCell.searchClosestAlliedPac().equals(this)) {
+                if (actualCell.getPoints() > 0
+                        && ((Player.remainingPallets < Player.consumedPallets && (closestAllyPac == null
+                                || closestAllyPac.getDistance() < actualCell.calculFlightDistance(this.currentCell)))
+                                || actualCell.searchClosestAlliedPac().equals(this))) {
                     candidatsCells.add(actualCell);
                 } else if (actualCell.getPoints() > 0 && closestTarget == null) {
                     closestTarget = actualCell;
                 }
 
-                futurCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && !alreadySeenCells.contains(c) && !futurCells.contains(c)
-                                && ((c.isIntersection() && !c.getIntersection().isTaken())
-                                        || (!c.isIntersection() && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
+                futurCells.addAll(actualCell.getNextCells().stream()
+                        .filter(c -> !alreadySeenCells.contains(c) && !futurCells.contains(c)
+                                && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                        && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
                         .collect(Collectors.toList()));
-            }
-
-            if (candidatsCells.size() == 1) {
-                return candidatsCells.get(0);
-            } else if (candidatsCells.size() > 0) {
-                Cell cellToTarget = candidatsCells.stream().filter(c -> c.isIntersection() || !c.getPipe().isDeadEnd())
-                        .findAny().orElse(null);
-                if (cellToTarget != null) {
-                    return cellToTarget;
-                } else {
-                    return candidatsCells.get(0);
-                }
+                counter++;
             }
 
             alreadySeenCells.addAll(actualCells);
             actualCells = futurCells;
-        } while (actualCells.size() > 0);
+
+        } while (actualCells.size() > 0 && candidatsCells.size() == 0 && counter < Player.limitCalculations);
+
+        if (candidatsCells.size() == 1) {
+            closestTarget = candidatsCells.get(0);
+        } else if (candidatsCells.size() > 0) {
+            List<Cell> sortedCandidats = candidatsCells
+                    .stream().filter(c -> this.getObligatoryObjectives().isEmpty()
+                            && this.getTargetedBigPellets().isEmpty() && c.isIntersection() || !c.getPipe().isDeadEnd())
+                    .collect(Collectors.toList());
+
+            if (closestAllyPac != null) {
+                Collections.sort(sortedCandidats,
+                        Comparator.comparing(c -> c.calculFlightDistance(closestAllyPac.getPac().getCurrentCell())));
+                Collections.reverse(sortedCandidats);
+            }
+
+            if (sortedCandidats.size() > 0) {
+                closestTarget = sortedCandidats.get(0);
+            } else {
+                closestTarget = candidatsCells.get(0);
+            }
+        }
+
+        if (this.speed == 2 && closestTarget != null) {
+            List<Cell> newCandidatsCells = new ArrayList<Cell>();
+            Cell finalClosestTarget = closestTarget;
+
+            newCandidatsCells.addAll(finalClosestTarget.getNextCells().stream()
+                    .filter(c -> c.getPacOnCell() == null && !alreadySeenCells.contains(c) && !newCandidatsCells.contains(c) && c.getPoints() > 0
+                            && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                    && (c.getPipe().isTakenBy() == this || c.getPipe().isTakenBy() == null))))
+                    .collect(Collectors.toList()));
+
+            if (newCandidatsCells.size() == 1) {
+                closestTarget = newCandidatsCells.get(0);
+            } else if (newCandidatsCells.size() > 0) {
+                Cell cellToTarget = newCandidatsCells.stream()
+                        .filter(c -> c.isIntersection() || !c.getPipe().isDeadEnd()).findAny().orElse(null);
+                if (cellToTarget != null) {
+                    closestTarget = cellToTarget;
+                } else {
+                    closestTarget = newCandidatsCells.get(0);
+                }
+            }
+        }
+
+        if (closestTarget == null) {
+            closestTarget = this.currentCell.getOpposedCell(this);
+        }
 
         return closestTarget;
     }
 
+    public void nextPriorityAction() {
+        String myCounter = getCounter(this.typeId);
+        String counterOfMyCounter = getCounter(myCounter);
+
+        if (counterFlee > 0) {
+            counterFlee--;
+            flee(lastEnemyPosition, this.currentCell.getDistanceTo(lastEnemyPosition));
+
+        } else if (Player.round != 1 && this.abilityCooldown == 0 && !this.isInDanger && Player.pacs.stream()
+                .filter(p -> !p.isMine() && p.getTypeId().equals(counterOfMyCounter)).count() == 0) {
+            switchTo(myCounter);
+
+        } else if (this.abilityCooldown == 0 && !this.isInDanger) {
+            if (this.previousCells.size() >= 3
+                    && this.previousCells.subList(this.previousCells.size() - 2, this.previousCells.size()).stream()
+                            .filter(c -> c != this.previousCells.get(this.previousCells.size() - 3)).count() == 0) {
+
+                if (this.previousCells.size() >= 13 && this.previousCells
+                        .subList(this.previousCells.size() - 12, this.previousCells.size()).stream()
+                        .filter(c -> c != this.previousCells.get(this.previousCells.size() - 13)).count() == 0) {
+                    switchTo(getCounter(getCounter(this.typeId)));
+                } else {
+                    switchTo(getCounter(this.typeId));
+                }
+
+            } else {
+                activateSpeed();
+            }
+        }
+    }
+
     public void nextAction() {
-        if (this.abilityCooldown == 0 && !this.isInDanger) {
-            activateSpeed();
-        } else if (!currentCell.isIntersection() && currentCell.getPipe().isDeadEnd()
+        if (!currentCell.isIntersection() && currentCell.getPipe().isDeadEnd()
                 && currentCell.getPipe().getPointsCells() == 0) {
             moveTo(currentCell.getPipe().getIntersections().get(0).getCell());
+
         } else {
             moveTo(this.getClosestPelletCell());
         }
     }
 
     public void refreshBigTargets() {
+        this.obligatoryObjectives.removeIf(tbp -> tbp.getPoints() < 1);
         this.targetedBigPellets.removeIf(tbp -> tbp.getPoints() < 1);
     }
 
     public void actionOnEnnemy(Pac ennemyPac) {
-        if (this.targetedBigPellets.size() == 0) {
+        if (this.targetedBigPellets.isEmpty() && this.obligatoryObjectives.isEmpty()) {
             int distance = this.currentCell.getDistanceTo(ennemyPac.getCurrentCell());
-            System.err.println(distance);
             boolean doPacWin = doPacWin(ennemyPac);
             String ennemyCounter = getCounter(ennemyPac.getTypeId());
 
-            if (!doPacWin) {
-                this.isInDanger = true;
+            if (!doPacWin && distance <= ennemyPac.speed
+                    && (!ennemyPac.getTypeId().equals(this.typeId) || ennemyPac.getTypeId().equals(this.typeId)
+                            && ennemyPac.getAbilityCooldown() <= this.abilityCooldown)) {
 
-                if (distance <= 5) {
-                    flee(ennemyPac, distance);
+                if (Player.round != 1 && distance <= ennemyPac.getSpeed()) {
+                    this.isInDanger = true;
+                    this.counterFlee = 5 - distance;
+                    flee(ennemyPac.getCurrentCell(), distance);
+                } else if (this.abilityCooldown == 0) {
+                    activateSpeed();
                 }
             }
 
-            if ((ennemyPac.getSpeed() == distance) && !doPacWin && this.abilityCooldown == 0) {
+            if (Player.round != 1 && (ennemyPac.getSpeed() >= distance) && !doPacWin && this.abilityCooldown == 0) {
                 switchTo(ennemyCounter);
-                return;
             }
 
-            if (doPacWin && ennemyPac.getAbilityCooldown() > 0 && this.targetedBigPellets.isEmpty()) {
-                chase(ennemyPac);
-            } else if (!doPacWin && ennemyPac.getAbilityCooldown() > 0 && this.abilityCooldown == 0) {
+            if (Player.round != 1 && !doPacWin && ennemyPac.getAbilityCooldown() > 0 && this.abilityCooldown == 0) {
+                this.print();
                 switchTo(ennemyCounter);
             }
         }
@@ -631,10 +957,16 @@ class Pac {
         moveTo(ennemyPac.getCurrentCell());
     }
 
-    public void flee(Pac ennemyPac, int distance) {
-        Cell fleeCell = this.currentCell.searchFleeCell(this, ennemyPac.getCurrentCell(), this.speed, distance);
+    public void flee(Cell ennemyCell, int distance) {
+        this.lastEnemyPosition = ennemyCell;
+
+        Cell fleeCell = this.currentCell.searchFleeCell(this, ennemyCell, this.speed, distance);
         if (fleeCell != null)
             moveTo(fleeCell);
+    }
+
+    public void print() {
+        System.err.println("Pac " + (mine ? "ally " : "ennemy ") + this.id + " " + this.typeId);
     }
 }
 
@@ -646,6 +978,8 @@ class Cell {
     private Pac pacOnCell;
     private Pipe pipe;
     private Intersection intersection;
+    private List<Cell> visionCells;
+    private List<Cell> nextCells;
 
     public Cell(int x, int y, int points) {
         this.x = x;
@@ -653,6 +987,8 @@ class Cell {
         this.points = points;
         this.isIntersection = false;
         this.pacOnCell = null;
+        this.visionCells = new ArrayList<Cell>();
+        this.nextCells = new ArrayList<Cell>();
     }
 
     public int getX() {
@@ -711,12 +1047,81 @@ class Cell {
         this.pipe = pipe;
     }
 
+    public List<Cell> getVisionCells() {
+        return visionCells;
+    }
+
+    public List<Cell> getNextCells() {
+        return nextCells;
+    }
+
+    public void addNextCell(Cell nextCell) {
+        this.nextCells.add(nextCell);
+    }
+
+    public void addNextCells(List<Cell> nextCells) {
+        this.nextCells.addAll(nextCells);
+    }
+
+    public void addVisionCells(List<Cell> newVisionCells) {
+
+        this.visionCells.addAll(
+                newVisionCells.stream().filter(c -> !this.visionCells.contains(c)).collect(Collectors.toList()));
+    }
+
+    public double calculFlightDistance(Cell cell) {
+        return Double.valueOf(Math.sqrt(Math.pow(this.x - cell.getX(), 2) + Math.pow(this.y - cell.getY(), 2)));
+    }
+
+    public Cell getOpposedCell(Pac pac) {
+        List<Cell> copyCells = new ArrayList<Cell>();
+        copyCells.addAll(Player.cells.stream()
+                .filter(c -> (c.isIntersection && !c.intersection.isTaken())
+                        || (!c.isIntersection && (c.pipe.isTakenBy() == null || c.pipe.isTakenBy() == pac)))
+                .collect(Collectors.toList()));
+
+        Collections.sort(copyCells, Comparator.comparing(c -> c.calculFlightDistance(this)));
+
+        Cell result = copyCells.get(copyCells.size() - 1);
+
+        return result;
+    }
+
+    public Pac searchClosestPacFlightDistance() {
+        List<DistancePac> distPac = new ArrayList<DistancePac>();
+
+        Player.pacs.stream().filter(p -> p.getCurrentCell() != null).forEach(p -> {
+            Double distance = this.calculFlightDistance(p.getCurrentCell());
+            distPac.add(new DistancePac(distance, p));
+        });
+
+        return Collections.min(distPac, Comparator.comparing(d -> d.getDistance())).getPac();
+    }
+
+    public Pac searchClosestAllyPacFlightDistance() {
+        List<Pac> alliesPacs = Player.pacs.stream().filter(p -> p.isMine()).collect(Collectors.toList());
+
+        if (alliesPacs.size() == 0) {
+            return null;
+        }
+
+        List<DistancePac> distPac = new ArrayList<DistancePac>();
+
+        alliesPacs.forEach(p -> {
+            Double distance = this.calculFlightDistance(p.getCurrentCell());
+            distPac.add(new DistancePac(distance, p));
+        });
+
+        return Collections.min(distPac, Comparator.comparing(d -> d.getDistance())).getPac();
+    }
+
     public Pac searchClosestPac() {
+        long counter = 1L;
+
         List<Cell> alreadySeenCells = new ArrayList<Cell>();
 
-        List<Cell> actualCells = Player.cells.stream().filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                || c.isPosition((x - 1 + Player.width) % Player.width, y) || c.isPosition(x, (y + 1) % Player.height)
-                || c.isPosition(x, (y - 1 + Player.height) % Player.height))).collect(Collectors.toList());
+        List<Cell> actualCells = new ArrayList<Cell>();
+        actualCells.addAll(this.nextCells);
 
         do {
             List<Cell> futurCells = new ArrayList<Cell>();
@@ -728,30 +1133,26 @@ class Cell {
                     return actualCell.getPacOnCell();
                 }
 
-                futurCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && !alreadySeenCells.contains(c) && !futurCells.contains(c))
+                futurCells.addAll(actualCell.getNextCells().stream()
+                        .filter(c -> !alreadySeenCells.contains(c) && !futurCells.contains(c))
                         .collect(Collectors.toList()));
+                counter++;
             }
 
             alreadySeenCells.addAll(actualCells);
             actualCells = futurCells;
-        } while (actualCells.size() > 0);
+        } while (actualCells.size() > 0 && counter < Player.limitCalculations);
 
-        return null;
+        return searchClosestPacFlightDistance();
     }
 
     public Pac searchClosestAlliedPac() {
+        long counter = 1L;
+
         List<Cell> alreadySeenCells = new ArrayList<Cell>();
 
-        List<Cell> actualCells = Player.cells.stream().filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                || c.isPosition((x - 1 + Player.width) % Player.width, y) || c.isPosition(x, (y + 1) % Player.height)
-                || c.isPosition(x, (y - 1 + Player.height) % Player.height))).collect(Collectors.toList());
+        List<Cell> actualCells = new ArrayList<Cell>();
+        actualCells.addAll(this.nextCells);
 
         do {
             List<Cell> futurCells = new ArrayList<Cell>();
@@ -763,32 +1164,24 @@ class Cell {
                     return actualCell.getPacOnCell();
                 }
 
-                futurCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && !alreadySeenCells.contains(c) && !futurCells.contains(c))
+                futurCells.addAll(actualCell.getNextCells().stream()
+                        .filter(c -> !alreadySeenCells.contains(c) && !futurCells.contains(c))
                         .collect(Collectors.toList()));
+                counter++;
             }
 
             alreadySeenCells.addAll(actualCells);
             actualCells = futurCells;
-        } while (actualCells.size() > 0);
+        } while (actualCells.size() > 0 && counter < Player.limitCalculations);
 
-        return null;
+        return searchClosestAllyPacFlightDistance();
     }
 
     public Cell searchFleeCell(Pac allyPac, Cell ennemyCell, int speed, int distance) {
-        List<Cell> possibleCells = Player.cells.stream()
-                .filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                        || c.isPosition((x - 1 + Player.width) % Player.width, y)
-                        || c.isPosition(x, (y + 1) % Player.height)
-                        || c.isPosition(x, (y - 1 + Player.height) % Player.height))
-                        && ((c.isIntersection() && !c.getIntersection().isTaken())
-                                || (!c.isIntersection() && (c.getPipe().isTakenBy() == allyPac || c.getPipe().isTakenBy() == null))))
+        List<Cell> possibleCells = this.getNextCells().stream()
+                .filter(c -> c.getPacOnCell() == null
+                        && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                && (c.getPipe().isTakenBy() == allyPac || c.getPipe().isTakenBy() == null))))
                 .collect(Collectors.toList());
 
         if (speed == 2) {
@@ -798,16 +1191,10 @@ class Cell {
             for (int i = 0; i < possibleCells.size(); i++) {
                 Cell actualCell = possibleCells.get(i);
 
-                newCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && !tempCells.contains(c) && !newCells.contains(c)
-                                && ((c.isIntersection() && !c.getIntersection().isTaken())
-                                        || (!c.isIntersection() && (c.getPipe().isTakenBy() == allyPac || c.getPipe().isTakenBy() == null))))
+                newCells.addAll(actualCell.getNextCells().stream()
+                        .filter(c -> c.getPacOnCell() == null && !tempCells.contains(c) && !newCells.contains(c)
+                                && ((c.isIntersection() && !c.getIntersection().isTaken()) || (!c.isIntersection()
+                                        && (c.getPipe().isTakenBy() == allyPac || c.getPipe().isTakenBy() == null))))
                         .collect(Collectors.toList()));
             }
 
@@ -817,8 +1204,24 @@ class Cell {
         possibleCells = possibleCells.stream().filter(c -> ennemyCell.getDistanceTo(c) > distance)
                 .collect(Collectors.toList());
 
-        Cell result = possibleCells.stream().filter(c -> c.isIntersection || !c.getPipe().isDeadEnd()).findAny()
+        Cell result = possibleCells.stream()
+                .filter(c -> (c.isIntersection || !c.getPipe().isDeadEnd()) && c.getPoints() > 0).findAny()
                 .orElse(null);
+
+        if (result == null) {
+            result = possibleCells.stream().filter(c -> c.isIntersection || !c.getPipe().isDeadEnd()).findAny()
+                    .orElse(null);
+        }
+
+        if (result == null) {
+            List<Cell> deadEndCells = possibleCells.stream().filter(c -> !c.isIntersection)
+                    .collect(Collectors.toList());
+
+            if (deadEndCells.size() > 0) {
+                Collections.sort(deadEndCells, Comparator.comparing(c -> c.getPipe().getPointsCells()));
+                result = deadEndCells.get(deadEndCells.size() - 1);
+            }
+        }
 
         if (result != null) {
             return result;
@@ -832,9 +1235,8 @@ class Cell {
         boolean found = false;
         List<Cell> alreadySeenCells = new ArrayList<Cell>();
 
-        List<Cell> actualCells = Player.cells.stream().filter(c -> (c.isPosition((x + 1) % Player.width, y)
-                || c.isPosition((x - 1 + Player.width) % Player.width, y) || c.isPosition(x, (y + 1) % Player.height)
-                || c.isPosition(x, (y - 1 + Player.height) % Player.height))).collect(Collectors.toList());
+        List<Cell> actualCells = new ArrayList<Cell>();
+        actualCells.addAll(this.nextCells);
 
         while (true) {
             List<Cell> futurCells = new ArrayList<Cell>();
@@ -847,14 +1249,8 @@ class Cell {
                     break;
                 }
 
-                futurCells.addAll(Player.cells.stream()
-                        .filter(c -> (c.isPosition((actualCell.getX() + 1) % Player.width, actualCell.getY())
-                                || c.isPosition((actualCell.getX() - 1 + Player.width) % Player.width,
-                                        actualCell.getY())
-                                || c.isPosition(actualCell.getX(), (actualCell.getY() + 1) % Player.height)
-                                || c.isPosition(actualCell.getX(),
-                                        (actualCell.getY() - 1 + Player.height) % Player.height))
-                                && !alreadySeenCells.contains(c) && !futurCells.contains(c))
+                futurCells.addAll(actualCell.getNextCells().stream()
+                        .filter(c -> !alreadySeenCells.contains(c) && !futurCells.contains(c))
                         .collect(Collectors.toList()));
             }
 
@@ -871,7 +1267,9 @@ class Cell {
 
     public void print() {
         System.err.println("x=" + this.x + " y=" + this.y + " pts=" + this.points + " pacOn="
-                + (this.pacOnCell != null ? this.pacOnCell.isMine() + " " + this.pacOnCell.getId() : "null"));
+                + (this.pacOnCell != null ? this.pacOnCell.isMine() + " " + this.pacOnCell.getId() : "null")
+                + " istaken=" + (isIntersection ? intersection.isTaken()
+                        : (pipe.isTakenBy() != null ? pipe.isTakenBy().getId() : null)));
     }
 }
 
@@ -953,4 +1351,106 @@ class Pipe {
     public void setIsTakenBy(Pac isTakenBy) {
         this.isTakenBy = isTakenBy;
     }
+}
+
+class DistancePac {
+    private Double distance;
+    private Pac pac;
+
+    public DistancePac(Double distance, Pac pac) {
+        this.distance = distance;
+        this.pac = pac;
+    }
+
+    public Double getDistance() {
+        return distance;
+    }
+
+    public Pac getPac() {
+        return pac;
+    }
+}
+
+class DistancePacBigPellet {
+    private int distance;
+    private Pac pac;
+    private Cell cell;
+
+    public DistancePacBigPellet(int distance, Pac pac, Cell cell) {
+        this.distance = distance;
+        this.pac = pac;
+        this.cell = cell;
+    }
+
+    public int getDistance() {
+        return distance;
+    }
+
+    public Pac getPac() {
+        return pac;
+    }
+
+    public Cell getCell() {
+        return cell;
+    }
+}
+
+class DistanceBetweenBigPellets {
+    private int distance;
+    private List<Cell> cells;
+
+    public DistanceBetweenBigPellets(int distance, Cell cell1, Cell cell2) {
+        this.distance = distance;
+        this.cells = new ArrayList<Cell>();
+        this.cells.add(cell1);
+        this.cells.add(cell2);
+    }
+
+    public int getDistance() {
+        return distance;
+    }
+
+    public boolean containsCells(Cell cell1, Cell cell2) {
+        if (this.cells.contains(cell1) && this.cells.contains(cell2)) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+class PossibilityObjective {
+    private List<Cell> objectiveList;
+    private int totalDistance;
+    private Pac pac;
+
+    public PossibilityObjective(Cell cell, int totalDistance, Pac pac) {
+        this.totalDistance = totalDistance;
+        this.pac = pac;
+
+        this.objectiveList = new ArrayList<Cell>();
+        this.objectiveList.add(cell);
+    }
+
+    public PossibilityObjective(Cell cell1, Cell cell2, int totalDistance, Pac pac) {
+        this.totalDistance = totalDistance;
+        this.pac = pac;
+
+        this.objectiveList = new ArrayList<Cell>();
+        this.objectiveList.add(cell1);
+        this.objectiveList.add(cell2);
+    }
+
+    public List<Cell> getObjectiveList() {
+        return objectiveList;
+    }
+
+    public Pac getPac() {
+        return pac;
+    }
+
+    public int getTotalDistance() {
+        return totalDistance;
+    }
+
 }
